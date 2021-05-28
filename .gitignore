@@ -1,0 +1,8 @@
+nbproject
+Vendor
+composer.lock
+Config
+.idea/
+.buildpath
+.project
+.settings/
