@@ -51,12 +51,13 @@ class Badge extends \Badge\Singleton
      * 初始化当日徽章数据.
      *
      * @param integer $uid       用户id.
+     * @param boolean $isCheck   是否只检查初始化状态(true:只检查;false:没有初始化时进行初始化).
      * @param boolean $isResData 是否返回数据.
      *
      * @return boolean|array
      * @throws \Exception 异常信息
      */
-    private function initRedisInfo($uid, $isResData = false)
+    private function initRedisInfo($uid, $isCheck = false, $isResData = false)
     {
         $result = false;
         $data = array();
@@ -64,6 +65,10 @@ class Badge extends \Badge\Singleton
         if ($cacheKey) {
             $redis = $this->getRedis($uid);
             if ($redis->hGet($cacheKey, 'date') != date('Y-m-d')) {
+                if ($isCheck) {
+                    // 没有初始化今日的数据.
+                    return $result;
+                }
                 $initCfg = isset(\Config\Badge::$initCfg) ? \Config\Badge::$initCfg : array();
                 $countSortMapCfg = isset(\Config\Badge::$countSortMapCfg) ? \Config\Badge::$countSortMapCfg : array();
                 if (!empty($initCfg)) {
@@ -71,21 +76,20 @@ class Badge extends \Badge\Singleton
                     foreach ($initCfg as $type => $dataOperate) {
                         // 统计数据初始化.
                         if ($dataOperate == 'total') {
-                            $data[$type] = $countSortMapCfg[$type];
+                            $data[$type] = isset($countSortMapCfg[$type]) ? $countSortMapCfg[$type] : 0;
                         }
                         // 虚拟数据初始化.
                         if ($dataOperate == 'virtual') {
-                            $data[$type] = $countSortMapCfg[$type];
+                            $data[$type] = isset($countSortMapCfg[$type]) ? $countSortMapCfg[$type] : 0;
                         }
                         // 查询数据初始化.
                         if ($dataOperate == 'select') {
-                            // 需要外部数据支持,默认初始为0.
-                            $data[$type] = 0;
-                            // 暂不支持数据自动查询.
-                            /*$dataTemp = $this->getData($uid, $type);
-                            if (!empty($dataTemp)) {
-                                $data[$type] = $dataTemp['data'];
-                            }*/
+                            // 需要外部数据支持,默认初始为配置中的值.
+                            $data[$type] = isset($countSortMapCfg[$type]) ? $countSortMapCfg[$type] : 0;
+                            // 根据临时数据的信息来确认外部数据最终的值.
+                            $tempData = $redis->hGet($cacheKey, 'temp_data');
+                            $tempData = empty($tempData) ? array() : json_decode($tempData, true);
+                            $data[$type] = isset($tempData[$type]) ? $tempData[$type] : $data[$type];
                         }
                     }
                     $data = $this->totalInfo($data);
@@ -96,6 +100,10 @@ class Badge extends \Badge\Singleton
                 }
             } else {
                 $result = true;
+                if ($isCheck) {
+                    // 今日的数据已初始化.
+                    return $result;
+                }
                 $data = $isResData ? $redis->hGetAll($cacheKey) : array();
             }
         }
@@ -126,46 +134,25 @@ class Badge extends \Badge\Singleton
     }
 
     /**
-     * 查询数据初始化.
-     *
-     * @param integer $uid  用户id.
-     * @param string  $type 查询数据的标记.
-     *
-     * @return array
-     * @throws \Exception 异常信息
-     */
-    /*private function getData($uid, $type)
-    {
-        $res = array();
-        switch ($type) {
-            case 'applet.root.task.sign_in':
-                $res['data'] = \Handler\Applet::instance()->hasSignedByDate($uid, array('source' => 'applet.root.task.sign_in')) ? 0 : 1; // 签到了就没有计数.
-                break;
-            default:
-                break;
-        }
-        return $res;
-    }*/
-
-    /**
      * 获取徽章数据.
      *
      * @param integer $uid      用户id.
      * @param array   $hashKeys 具体查询的hashKeys,不传查所有.
+     * @param boolean $isFormat 是否格式化返回数据.
      *
      * @return array
      * @throws \Exception 异常信息
      */
-    private function getRedisInfo($uid, array $hashKeys = array())
+    private function getRedisInfo($uid, array $hashKeys = array(), $isFormat = false)
     {
         $result = array();
         $cacheKey = $this->getCacheKey($uid);
         if ($cacheKey) {
             $redis = $this->getRedis($uid);
-            if ($redis->hGet($cacheKey, 'date') == date('Y-m-d')) {
+            if ($this->initRedisInfo($uid, true)) {
                 $data = empty($hashKeys) ? $redis->hGetAll($cacheKey) : $redis->hMGet($cacheKey, $hashKeys);
                 if ($data) {
-                    $result = $this->formatInfo($uid, $data);
+                    $result = $isFormat ? $this->formatInfo($uid, $data) : $data;
                 }
             }
         }
@@ -178,7 +165,7 @@ class Badge extends \Badge\Singleton
      * @param string  $uid     用户id.
      * @param array   $data    数据.
      * @param string  $operate 操作类型(add:添加;update:更新).
-     * @param boolean $isInit  是否初始化写入.
+     * @param boolean $isInit  是否初始化写入(慎重使用).
      *
      * @return array
      * @throws \Exception 异常信息
@@ -188,13 +175,21 @@ class Badge extends \Badge\Singleton
         $cacheKey = $this->getCacheKey($uid);
         if ($cacheKey) {
             $redis = $this->getRedis($uid);
-            if ($redis->hGet($cacheKey, 'date') == date('Y-m-d') || $isInit) {
+            if ($this->initRedisInfo($uid, true) || $isInit) {
                 if ($isInit) {
                     $redis->del($cacheKey);
+                    // 初始化时检查当日日期是否有存入.
+                    $data['date'] = empty($data['date']) ? date('Y-m-d') : $data['date'];
                 } else {
                     $data = $this->dealInfo($uid, $data, $operate);
                 }
                 $result = $redis->hMSet($cacheKey, $data);
+            } else {
+                // 今日没有初始化数据，将外部写入数据放入临时字段中.
+                $tempData = $redis->hGet($cacheKey, 'temp_data');
+                $tempData = empty($tempData) ? array() : json_decode($tempData, true);
+                $tempData = $this->saveRedisTempData($tempData, $data, $operate);
+                $redis->hSet($cacheKey, 'temp_data', json_encode($tempData));
             }
         }
         return empty($result) ? array() : $data;
@@ -216,23 +211,23 @@ class Badge extends \Badge\Singleton
         $allData = $this->getSubpathInfo($uid, $data, true);
         if ($operate == 'add') {
             // 添加数据(加法).
-            foreach ($allData as $aKey => $aNum) {
+            foreach ($allData as $aKey => &$aNum) {
                 foreach ($data as $type => $num) {
                     if (strpos($type, $aKey) !==false) {
                         $addendNum = (integer)$num;
-                        $allData[$aKey] = $aNum + $addendNum;
+                        $aNum = $aNum + $addendNum;
                     }
                 }
             }
         } elseif ($operate == 'update') {
             // 更新数据(减法).
-            foreach ($allData as $aKey => $aNum) {
+            foreach ($allData as $aKey => &$aNum) {
                 foreach ($data as $type => $num) {
                     if (strpos($type, $aKey) !==false) {
                         $minusNum = (integer)$num > $allData[$type] ? $allData[$type] : (integer)$num;
-                        $allData[$aKey] = $aNum - $minusNum;
+                        $aNum = $aNum - $minusNum;
                         // 减成负数就置为0.
-                        $allData[$aKey] = $allData[$aKey] < 0 ? 0 : $allData[$aKey];
+                        $aNum = $aNum < 0 ? 0 : $aNum;
                     }
                 }
             }
@@ -241,16 +236,57 @@ class Badge extends \Badge\Singleton
     }
 
     /**
+     * 记录临时数据(今日未初始化的外部数据).
+     *
+     * @param array   $oldData 原数据.
+     * @param array   $newData 新数据.
+     * @param string  $operate 操作类型.
+     *
+     * @return array
+     * @throws \Exception 异常信息
+     */
+    private function saveRedisTempData(array $oldData, array $newData, $operate)
+    {
+        $data = $oldData;
+        if ($operate == 'add') {
+            // 添加数据(加法).
+            foreach ($newData as $aKey => $aNum) {
+                if (isset($data[$aKey])) {
+                    $addendNum = (integer)$data[$aKey];
+                    $data[$aKey] = (integer)$aNum + $addendNum;
+                } else {
+                    $data[$aKey] = (integer)$aNum;
+                }
+            }
+        } elseif ($operate == 'update') {
+            // 更新数据(减法).
+            foreach ($newData as $aKey => $aNum) {
+                if (isset($data[$aKey])) {
+                    $num = (integer)$data[$aKey]; // 被减数.
+                    $minusNum = (integer)$aNum > $num ? $num : (integer)$aNum; // 减数.
+                    $data[$aKey] = $num - $minusNum; // 差.
+                    // 减成负数就置为0.
+                    $data[$aKey] = $data[$aKey] < 0 ? 0 : $data[$aKey];
+                } else {
+                    $data[$aKey] = 0;
+                }
+            }
+        }
+        return $data;
+    }
+
+    /**
      * 根据子路径获取上级所有路径的redis信息.
      *
      * @param integer $uid         用户id.
      * @param array   $data        数据.
      * @param boolean $isRedisData 是否返回redis数据.
+     * @param boolean $isFormat    是否格式化返回数据.
      *
      * @return array
      * @throws \Exception 异常信息
      */
-    private function getSubpathInfo($uid, array $data, $isRedisData = false)
+    private function getSubpathInfo($uid, array $data, $isRedisData = false, $isFormat = false)
     {
         // 获取所有路径.
         $allPaths = array();
@@ -267,7 +303,7 @@ class Badge extends \Badge\Singleton
             $allPaths[] = $type;
         }
         sort($allPaths);
-        return $isRedisData ? $this->getInfoByTypes($uid, $allPaths) : $allPaths;
+        return $isRedisData ? $this->getInfoByTypes($uid, $allPaths, $isFormat) : $allPaths;
     }
 
     /**
@@ -286,8 +322,8 @@ class Badge extends \Badge\Singleton
         $countSortMapCfg = isset(\Config\Badge::$countSortMapCfg) ? \Config\Badge::$countSortMapCfg : array();
         $textSortMapCfg = isset(\Config\Badge::$textSortMapCfg) ? \Config\Badge::$textSortMapCfg : array();
         foreach ($data as $type => $num) {
-            if ($type == 'date') {
-                // 日期不处理.
+            if (in_array($type, array('date', 'temp_data'))) {
+                // 特殊字段不处理.
                 continue;
             }
             $sorts = explode('|', $sortCfg[$type]);
@@ -316,7 +352,7 @@ class Badge extends \Badge\Singleton
         }
         // 检查非数字展示是否向上级路径覆盖.
         foreach ($data as $key => $value) {
-            if ($key == 'date') {
+            if (in_array($type, array('date', 'temp_data'))) {
                 // 日期不处理.
                 continue;
             }
@@ -325,7 +361,7 @@ class Badge extends \Badge\Singleton
                 $temp = array_diff($this->getSubpathInfo($uid, array($key => 0)), array($key));
                 if (!empty($temp)) {
                     foreach ($temp as $v) {
-                        if (is_numeric($data[$v])) {
+                        if (isset($data[$v]) && is_numeric($data[$v])) {
                             $sorts = explode('|', $sortCfg[$v]);
                             $sort = $sorts[0];
                             if (in_array($sort, array('red_dot', 'text'))){
@@ -343,31 +379,33 @@ class Badge extends \Badge\Singleton
      * 初始化当日徽章数据.
      *
      * @param integer $uid       用户id.
+     * @param boolean $isCheck   是否只检查初始化状态(true:只检查;false:没有初始化时进行初始化).
      * @param boolean $isResData 是否返回数据.
      *
      * @return boolean|array
      * @throws \Exception 异常信息
      */
-    public function initInfo($uid, $isResData = false)
+    public function initInfo($uid, $isCheck = false, $isResData = false)
     {
-        return $this->initRedisInfo($uid, $isResData);
+        return $this->initRedisInfo($uid, $isCheck, $isResData);
     }
 
     /**
      * 获取自选徽章信息.
      *
-     * @param integer      $uid   用户id.
-     * @param string|array $types 徽章类型.
+     * @param integer      $uid      用户id.
+     * @param string|array $types    徽章类型.
+     * @param boolean      $isFormat 是否格式化返回数据.
      *
      * @return array
      * @throws \Exception 异常信息
      */
-    public function getInfoByTypes($uid, $types)
+    public function getInfoByTypes($uid, $types, $isFormat = true)
     {
         $res = array();
         if (!empty($types)) {
             $types = is_array($types) ? $types : explode(',', $types);
-            $res = $this->getRedisInfo($uid, $types);
+            $res = $this->getRedisInfo($uid, $types, $isFormat);
         }
         return $res;
     }
@@ -375,19 +413,20 @@ class Badge extends \Badge\Singleton
     /**
      * 根据多个徽章获取所有路径上徽章信息.
      *
-     * @param integer      $uid   用户id.
-     * @param string|array $types 徽章类型.
+     * @param integer      $uid      用户id.
+     * @param string|array $types    徽章类型.
+     * @param boolean      $isFormat 是否格式化返回数据.
      *
      * @return array
      * @throws \Exception 异常信息
      */
-    public function getInfoFromUrls($uid, $types)
+    public function getInfoFromUrls($uid, $types, $isFormat = true)
     {
         $res = array();
         if (!empty($types)) {
             $types = is_array($types) ? $types : explode(',', $types);
             $types = array_flip($types);
-            $res = $this->getSubpathInfo($uid, $types, true);
+            $res = $this->getSubpathInfo($uid, $types, true, $isFormat);
         }
         return $res;
     }

@@ -62,6 +62,7 @@ class Badge
         'applet.root.home' => 0,
         'applet.root.task' => 0,
         'applet.root.me' => 0,
+        'applet.root.task.sign_in' => 1,
     );
 
     /**

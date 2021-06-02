@@ -16,8 +16,11 @@ $uid = 123456789;
 $a1 = \Badge\Badge::instance()->initInfo($uid);
 var_dump($a1); // true初始化成功,false初始化失败.
 // 初始化当日徽章数据 返回初始数据.
-$a2 = \Badge\Badge::instance()->initInfo($uid, true);
+$a2 = \Badge\Badge::instance()->initInfo($uid, false, true);
 var_dump($a2); // 返回数组信息初始化成功,返回空数组初始化失败.
+// 初始化当日徽章数据 只检查初始化状态.
+$a3 = \Badge\Badge::instance()->initInfo($uid, true);
+var_dump($a3); // 返回true当日徽章数据已经初始化,返回false当日徽章数据未初始化.
 
 // 获取自选徽章信息.
 $types = 'applet.root.home'; // 多个$types = 'applet.root.home, applet.root.me'.
@@ -38,12 +41,12 @@ var_dump($c2); // 返回传入的徽章的所有路径redis信息的数组.
 // 添加多个徽章信息(操作为加法).
 $types = array('applet.root.home' => 1); // 多个$types = array('applet.root.home' => 1, 'applet.root.me' => 8).
 $d = \Badge\Badge::instance()->addInfos($uid, $types);
-var_dump($d); // 返回成功操作的数据.
+var_dump($d); // 返回成功操作的数据(特别注意:如果今日没有初始化,数据将写入到临时数据中,返回依然是个空,只有在初始化后会根据外部的临时数据来写入).
 
 // 更新多个徽章信息(操作为减法).
 $types = array('applet.root.home' => 1); // 多个$types = array('applet.root.home' => 1, 'applet.root.me' => 8).
 $e = \Badge\Badge::instance()->updateInfos($uid, $types);
-var_dump($e); // 返回成功操作的数据.
+var_dump($e); // 返回成功操作的数据(特别注意:如果今日没有初始化,数据将写入到临时数据中,返回依然是个空,只有在初始化后会根据外部的临时数据来写入).
 
 
 // 配置存入格式说明.
@@ -86,6 +89,7 @@ array(
     'applet.root.home' => 0,
     'applet.root.task' => 0,
     'applet.root.me' => 0,
+    'applet.root.task.sign_in' => 1, // 这个是来自外部的数据,给一个默认值.
 );
 
 \Config\Badge::$textSortMapCfg 展示文本分类属性的所有徽章(如果存在数据,并且是文本展示类型,满足展示就从中获取展示文案).
