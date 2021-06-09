@@ -107,7 +107,7 @@ class Badge extends \Badge\Singleton
                 $data = $isResData ? $redis->hGetAll($cacheKey) : array();
             }
         }
-        return $result && $isResData ? $this->formatInfo($uid, $data) : $result;
+        return $isResData ? ($result ? $this->formatInfo($uid, $data) : $data) : $result;
     }
 
     /**
